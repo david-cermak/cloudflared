@@ -1,0 +1,13 @@
+Requesting new quick Tunnel on https://api.trycloudflare.com...
+
++--------------------------------------------------------------------------------------------+
+|  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
+|  https://investments-madonna-bonus-concrete.trycloudflare.com                       |
++--------------------------------------------------------------------------------------------+
+
+Tunnel ID: 0e01c39c-b7a3-4c99-aee9-ac24d19d98f8
+Account Tag: 5ab4e9dfbd435d24068829fda0077963
+Secret length: 32 bytes
+Secret (first 16 bytes, hex): f8c574614c5ae57e4e54e5dd95a16a08
+Quick tunnel request completed successfully.
+Exiting (Phase 1.1 - tunnel request only).
