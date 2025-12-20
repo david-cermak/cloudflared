@@ -3,7 +3,15 @@
 
 #include <string>
 #include <vector>
+
+// Platform-specific HTTP client includes
+#if defined(ESP_PLATFORM) || defined(ESP_IDF_VERSION)
+#include "http_client_esp32.h"
+typedef HttpClientEsp32 HttpClientPlatform;
+#else
 #include "http_client_host.h"
+typedef HttpClientHost HttpClientPlatform;
+#endif
 
 struct QuickTunnelCredentials {
     std::string id;           // Tunnel UUID
@@ -21,7 +29,7 @@ public:
     
 private:
     std::string quick_service_url_;
-    HttpClientHost http_client_;
+    HttpClientPlatform http_client_;
     
     // Parse JSON response
     QuickTunnelCredentials parseResponse(const std::string& json_response);

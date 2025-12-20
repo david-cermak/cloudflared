@@ -35,19 +35,20 @@ if(NOT CJSON_FOUND)
 endif()
 
 # Include directories
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/cjson)
 
-# Source files
+# Source files (using component sources)
 set(SOURCES
-    src/main.cpp
-    src/quick_tunnel.cpp
-    src/http_client_host.cpp
+    components/cloudflared/src/main.cpp
+    components/cloudflared/src/quick_tunnel.cpp
+    components/cloudflared/src/http_client_host.cpp
 )
 
 set(HEADERS
-    src/quick_tunnel.h
-    src/http_client_host.h
+    components/cloudflared/include/quick_tunnel.h
+    components/cloudflared/include/http_client_host.h
 )
 
 # Add executable

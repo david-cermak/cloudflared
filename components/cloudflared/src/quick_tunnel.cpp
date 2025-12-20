@@ -1,10 +1,16 @@
-#include "quick_tunnel.h"
-#include <cjson/cJSON.h>
-#include <iostream>
+#include <quick_tunnel.h>
+#include <cJSON.h>
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
+
+#if defined(ESP_PLATFORM) || defined(ESP_IDF_VERSION)
+#include "esp_log.h"
+#define QUICK_TUNNEL_TAG "QUICK_TUNNEL"
+#else
+#include <iostream>
+#endif
 
 // Base64 decoding helper (simple implementation)
 static std::vector<uint8_t> base64_decode(const std::string& encoded) {
@@ -49,9 +55,15 @@ QuickTunnelCredentials QuickTunnel::requestTunnel() {
     HttpResponse response = http_client_.post(url, "", headers);
     
     if (response.status_code != 200) {
-        throw std::runtime_error("Quick tunnel request failed with status code: " + 
+        std::string error_msg = "Quick tunnel request failed with status code: " + 
                                 std::to_string(response.status_code) + 
-                                ", response: " + response.body);
+                                ", response: " + response.body;
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#else
+        std::cerr << error_msg << std::endl;
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Parse JSON response
@@ -64,24 +76,37 @@ QuickTunnelCredentials QuickTunnel::parseResponse(const std::string& json_respon
     cJSON* json = cJSON_Parse(json_response.c_str());
     if (!json) {
         const char* error_ptr = cJSON_GetErrorPtr();
-        if (error_ptr != nullptr) {
-            throw std::runtime_error("JSON parse error: " + std::string(error_ptr));
-        }
-        throw std::runtime_error("JSON parse error: unknown");
+        std::string error_msg = error_ptr != nullptr ? 
+            ("JSON parse error: " + std::string(error_ptr)) : 
+            "JSON parse error: unknown";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#else
+        std::cerr << error_msg << std::endl;
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Check for success field
     cJSON* success = cJSON_GetObjectItemCaseSensitive(json, "success");
     if (cJSON_IsBool(success) && !cJSON_IsTrue(success)) {
         cJSON_Delete(json);
-        throw std::runtime_error("Quick tunnel request was not successful");
+        std::string error_msg = "Quick tunnel request was not successful";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Get result object
     cJSON* result = cJSON_GetObjectItemCaseSensitive(json, "result");
     if (!cJSON_IsObject(result)) {
         cJSON_Delete(json);
-        throw std::runtime_error("JSON response missing 'result' object");
+        std::string error_msg = "JSON response missing 'result' object";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Extract id
@@ -90,7 +115,11 @@ QuickTunnelCredentials QuickTunnel::parseResponse(const std::string& json_respon
         creds.id = id->valuestring;
     } else {
         cJSON_Delete(json);
-        throw std::runtime_error("JSON response missing or invalid 'id' field");
+        std::string error_msg = "JSON response missing or invalid 'id' field";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Extract secret (base64 encoded string in JSON, decode to binary)
@@ -103,11 +132,19 @@ QuickTunnelCredentials QuickTunnel::parseResponse(const std::string& json_respon
             creds.secret = base64_decode(secret_str);
         } catch (const std::exception& e) {
             cJSON_Delete(json);
-            throw std::runtime_error("Failed to decode secret from base64: " + std::string(e.what()));
+            std::string error_msg = "Failed to decode secret from base64: " + std::string(e.what());
+#ifdef ESP_PLATFORM
+            ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+            throw std::runtime_error(error_msg);
         }
     } else {
         cJSON_Delete(json);
-        throw std::runtime_error("JSON response missing or invalid 'secret' field");
+        std::string error_msg = "JSON response missing or invalid 'secret' field";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Extract account_tag
@@ -116,7 +153,11 @@ QuickTunnelCredentials QuickTunnel::parseResponse(const std::string& json_respon
         creds.account_tag = account_tag->valuestring;
     } else {
         cJSON_Delete(json);
-        throw std::runtime_error("JSON response missing or invalid 'account_tag' field");
+        std::string error_msg = "JSON response missing or invalid 'account_tag' field";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     // Extract hostname
@@ -125,7 +166,11 @@ QuickTunnelCredentials QuickTunnel::parseResponse(const std::string& json_respon
         creds.hostname = hostname->valuestring;
     } else {
         cJSON_Delete(json);
-        throw std::runtime_error("JSON response missing or invalid 'hostname' field");
+        std::string error_msg = "JSON response missing or invalid 'hostname' field";
+#ifdef ESP_PLATFORM
+        ESP_LOGE(QUICK_TUNNEL_TAG, "%s", error_msg.c_str());
+#endif
+        throw std::runtime_error(error_msg);
     }
     
     cJSON_Delete(json);
