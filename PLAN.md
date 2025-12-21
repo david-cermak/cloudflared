@@ -30,10 +30,11 @@ Minimal C++ rewrite of cloudflared's quick tunnel functionality with ESP32 compa
 - [x] Fix cJSON linking issues
 
 **Files Created**:
-- `src/quick_tunnel.cpp/h` - Quick tunnel request implementation
-- `src/http_client_host.cpp/h` - libcurl-based HTTP client
-- `src/main.cpp` - Entry point for phase 1
-- `CMakeLists.txt` - Build configuration
+- `components/cloudflared/src/quick_tunnel.cpp/h` - Quick tunnel request implementation
+- `components/cloudflared/src/http_client_host.cpp/h` - libcurl-based HTTP client
+- `components/cloudflared/src/main.cpp` - Host entry point for phase 1
+- `components/cloudflared/include/` - Public headers
+- `CMakeLists.txt` - Host build configuration
 
 **Status**: ✅ COMPLETED - Working and tested
 
@@ -49,38 +50,38 @@ Minimal C++ rewrite of cloudflared's quick tunnel functionality with ESP32 compa
 
 **Status**: ✅ COMPLETED
 
-#### 1.3 Compare Host C++ vs Go ⏳
-- [ ] Run both implementations side-by-side
-- [ ] Compare HTTP request headers
-- [ ] Compare response parsing
-- [ ] Compare extracted values
-- [ ] Use tshark/Wireshark to capture network traffic
-- [ ] Verify: Same API endpoint, same request format, same response handling
+#### 1.3 Compare Host C++ vs Go ✅
+- [x] Run both implementations side-by-side
+- [x] Compare HTTP request headers
+- [x] Compare response parsing
+- [x] Compare extracted values
+- [x] Use tshark/Wireshark to capture network traffic
+- [x] Verify: Same API endpoint, same request format, same response handling
 
-**Status**: ⏳ READY FOR TESTING (test script created: `test_phase1.sh`)
+**Status**: ✅ COMPLETED
 
-#### 1.4 Implement C++ ESP32 Version ⏳
-- [ ] Create ESP32 HTTP client wrapper (esp_http_client)
-- [ ] Implement same quick tunnel request logic
-- [ ] Handle ESP32-specific: WiFi connection, certificate validation
-- [ ] Use cJSON (same as host version)
-- [ ] Print tunnel URL via serial
-- [ ] Create platform abstraction layer
+#### 1.4 Implement C++ ESP32 Version ✅
+- [x] Create ESP32 HTTP client wrapper (esp_http_client)
+- [x] Implement same quick tunnel request logic
+- [x] Handle ESP32-specific: WiFi connection, certificate validation
+- [x] Use cJSON (same as host version)
+- [x] Print tunnel URL via serial
+- [x] Create platform abstraction layer
 
-**Files to Create**:
-- `src/http_client_esp32.cpp/h` - ESP-IDF HTTP client wrapper
-- `src/main_esp32.cpp` - ESP32 entry point
+**Files Created**:
+- `components/cloudflared/src/http_client_esp32.cpp/h` - ESP-IDF HTTP client wrapper
+- `quick-tunnel/main/quick-tunnel.cpp` - ESP32 entry point
 
-**Status**: ⏳ PENDING
+**Status**: ✅ COMPLETED
 
-#### 1.5 Compare ESP32 vs Host vs Go ⏳
-- [ ] Run all three implementations
-- [ ] Compare request format
-- [ ] Compare response parsing
-- [ ] Compare extracted credentials
-- [ ] Verify: ESP32 produces same results as host and Go versions
+#### 1.5 Compare ESP32 vs Host vs Go ✅
+- [x] Run all three implementations
+- [x] Compare request format
+- [x] Compare response parsing
+- [x] Compare extracted credentials
+- [x] Verify: ESP32 produces same results as host and Go versions
 
-**Status**: ⏳ PENDING
+**Status**: ✅ COMPLETED
 
 ---
 
@@ -88,29 +89,36 @@ Minimal C++ rewrite of cloudflared's quick tunnel functionality with ESP32 compa
 
 **Goal**: Discover Cloudflare edge servers via DNS SRV lookup.
 
-#### 2.1 Implement C++ Host Version ⏳
+#### 2.1 Instrument/Extract Go Version ⏳
+- [ ] Add logging to `edgediscovery/allregions/discovery.go`
+- [ ] Log: SRV query domain, SRV records (priority, weight, port, target)
+- [ ] Log: Resolved IPs for each SRV target
+- [ ] Log: EdgeAddr structures (TCP/UDP addresses, IP version)
+- [ ] Log: Regions discovered (expect at least 2)
+- [ ] Run edge discovery only (modify Go code to stop after discovery)
+- [ ] Test with `dig` command to verify SRV records manually
+
+**Status**: ⏳ IN PROGRESS
+
+#### 2.2 Implement C++ Host Version ⏳
 - [ ] DNS SRV lookup for `_v2-origintunneld._tcp.argotunnel.com`
-- [ ] Resolve returned hostnames to IP addresses
-- [ ] Select edge IP (UDP address for QUIC)
+- [ ] Implement fallback to DoT (DNS over TLS) if regular DNS fails
+- [ ] Resolve returned hostnames to IP addresses (both IPv4 and IPv6)
+- [ ] Create EdgeAddr structures (TCP/UDP addresses, IP version)
+- [ ] Handle multiple regions (expect at least 2)
 - [ ] Print discovered edge addresses
 
 **Files to Create**:
-- `src/edge_discovery.cpp/h` - DNS SRV lookup and resolution
-
-**Status**: ⏳ PENDING
-
-#### 2.2 Instrument/Extract Go Version ⏳
-- [ ] Add logging to `edgediscovery/allregions/discovery.go`
-- [ ] Log: SRV query, resolved IPs, selected edge address
-- [ ] Run edge discovery only (modify Go code to stop after discovery)
+- `components/cloudflared/src/edge_discovery.cpp/h` - DNS SRV lookup and resolution
 
 **Status**: ⏳ PENDING
 
 #### 2.3 Compare Host C++ vs Go ⏳
-- [ ] Compare DNS queries
+- [ ] Compare DNS queries (SRV domain, fallback behavior)
 - [ ] Compare resolved IPs
 - [ ] Compare edge selection logic
-- [ ] Verify: Same SRV records, same IP resolution
+- [ ] Compare region handling
+- [ ] Verify: Same SRV records, same IP resolution, same structure
 
 **Status**: ⏳ PENDING
 
@@ -342,7 +350,7 @@ Minimal C++ rewrite of cloudflared's quick tunnel functionality with ESP32 compa
 
 ## Progress Summary
 
-- **Phase 1**: ✅ 2/5 sub-phases completed (1.1, 1.2 done; 1.3 ready for testing)
+- **Phase 1**: ✅ 5/5 sub-phases completed - COMPLETED
 - **Phase 2**: ⏳ 0/5 sub-phases completed
 - **Phase 3**: ⏳ 0/5 sub-phases completed
 - **Phase 4**: ⏳ 0/5 sub-phases completed
@@ -350,7 +358,7 @@ Minimal C++ rewrite of cloudflared's quick tunnel functionality with ESP32 compa
 - **Phase 6**: ⏳ 0/5 sub-phases completed
 - **Phase 7**: ⏳ 0/4 sub-phases completed
 
-**Overall Progress**: 2/34 sub-phases completed (~6%)
+**Overall Progress**: 5/34 sub-phases completed (~15%)
 
 ## Notes
 
