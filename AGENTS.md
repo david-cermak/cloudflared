@@ -1,16 +1,36 @@
 # C++ Cloudflared Quick Tunnel - Agent Documentation
 
+## Repository Layout (IMPORTANT)
+
+This git repository contains **two separate codebases**:
+
+- **Go cloudflared (reference / “source of truth”)**: lives at the **repo root** (this directory’s parent).
+  - Example files: `cmd/cloudflared/tunnel/quick_tunnel.go`, `edgediscovery/allregions/discovery.go`, `connection/*`, `proxy/*`
+  - We only touch Go files for **instrumentation/comparison** (logging, early-exit env vars, etc).
+
+- **C++ rewrite (this project)**: lives under **`cpp-cloudflared/`** (this directory).
+  - Host build: `cpp-cloudflared/CMakeLists.txt`
+  - C++ implementation: `cpp-cloudflared/components/cloudflared/{include,src}/`
+  - ESP32 app: `cpp-cloudflared/quick-tunnel/` (ESP-IDF project)
+
+### Path Safety Rules (to avoid costly mistakes)
+
+- **All new C++ files must be created under** `cpp-cloudflared/…` (usually `cpp-cloudflared/components/cloudflared/...`).
+- **Never add C++ source/header files under the repo root** (outside `cpp-cloudflared/`). The Go project is the reference, not the C++ target.
+- When searching/editing, prefer **absolute paths** (e.g. `/home/david/repos/cloudflared/cpp-cloudflared/...`) to make it obvious which tree you’re in.
+
 ## Project Overview
 
 This project is a minimal C++ rewrite of cloudflared's quick tunnel functionality, designed to work on both host systems (Linux/Windows) and ESP32. The goal is to create a lightweight, ESP32-compatible implementation that can establish a Cloudflare tunnel connection and proxy HTTP requests.
 
 ## Original Implementation
 
-The reference implementation is the Go version of cloudflared, located in the parent directory. Key files:
+The reference implementation is the **Go version of cloudflared** at the repo root. Key files (repo-root relative paths):
+
 - `cmd/cloudflared/tunnel/quick_tunnel.go` - Quick tunnel request logic
+- `edgediscovery/allregions/discovery.go` - Edge server discovery (DNS SRV lookup + DoT fallback)
 - `connection/quic_connection.go` - QUIC connection handling
 - `connection/control.go` - Control stream and tunnel registration
-- `edgediscovery/allregions/discovery.go` - Edge server discovery
 - `proxy/proxy.go` - HTTP proxying to origin
 
 ## Architecture
@@ -54,11 +74,13 @@ cpp-cloudflared/
 ├── AGENTS.md               # This file - agent documentation
 ├── PLAN.md                 # Implementation plan and checklist
 ├── PHASE1_NOTES.md         # Phase 1 specific notes
+├── PHASE2_NOTES.md         # Phase 2 specific notes
 ├── test_phase1.sh          # Test script for Phase 1
-├── src/
-│   ├── main.cpp           # Host entry point
-│   ├── quick_tunnel.cpp/h # Quick tunnel request
-│   └── http_client_host.cpp/h # libcurl HTTP client
+├── components/
+│   └── cloudflared/
+│       ├── include/        # Public headers (host + ESP32)
+│       └── src/            # Host implementation sources
+├── quick-tunnel/           # ESP32 (ESP-IDF) app project
 ├── third_party/
 │   └── cjson/             # Bundled cJSON library
 └── build/                  # Build directory

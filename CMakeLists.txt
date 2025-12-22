@@ -4,6 +4,8 @@ project(cpp-cloudflared VERSION 0.1.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CTest)
+
 # Find required packages
 find_package(PkgConfig REQUIRED)
 
@@ -37,6 +39,7 @@ endif()
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/dns_utils/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/cjson)
 
 # Source files (using component sources)
@@ -44,11 +47,15 @@ set(SOURCES
     components/cloudflared/src/main.cpp
     components/cloudflared/src/quick_tunnel.cpp
     components/cloudflared/src/http_client_host.cpp
+    components/cloudflared/src/edge_discovery.cpp
+    components/dns_utils/src/dns_utils.cpp
 )
 
 set(HEADERS
     components/cloudflared/include/quick_tunnel.h
     components/cloudflared/include/http_client_host.h
+    components/cloudflared/include/edge_discovery.h
+    components/dns_utils/include/dns_utils.h
 )
 
 # Add executable
@@ -57,6 +64,7 @@ add_executable(cpp-cloudflared ${SOURCES} ${HEADERS})
 # Link libraries
 target_link_libraries(cpp-cloudflared
     ${CURL_LIBRARIES}
+    resolv
 )
 
 target_include_directories(cpp-cloudflared PRIVATE
@@ -84,4 +92,19 @@ endif()
 # Compiler options
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(cpp-cloudflared PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# -----------------------
+# Tests (host only)
+# -----------------------
+if(BUILD_TESTING)
+    add_executable(test_phase2_srv
+        tests/test_phase2_srv.cpp
+        components/dns_utils/src/dns_utils.cpp
+    )
+    target_include_directories(test_phase2_srv PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/components/dns_utils/include
+    )
+    target_link_libraries(test_phase2_srv resolv)
+    add_test(NAME test_phase2_srv COMMAND test_phase2_srv)
 endif()

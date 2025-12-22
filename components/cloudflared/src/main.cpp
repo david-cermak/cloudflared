@@ -1,7 +1,10 @@
 #include "quick_tunnel.h"
+#include "edge_discovery.h"
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 #include <stdexcept>
+#include <string>
 
 void printTunnelInfo(const QuickTunnelCredentials& creds) {
     std::cout << "\n";
@@ -27,8 +30,46 @@ void printTunnelInfo(const QuickTunnelCredentials& creds) {
     }
 }
 
+static void printEdgeDiscovery(const std::vector<std::vector<EdgeAddr>>& groups) {
+    std::cout << "\n";
+    std::cout << "Discovered " << groups.size() << " SRV groups (Go uses the first 2 as regions)\n";
+    for (size_t group = 0; group < groups.size(); ++group) {
+        std::cout << "\n";
+        std::cout << "SRV group " << group << ":\n";
+        for (const auto& addr : groups[group]) {
+            const char* v = (addr.ip_version == EdgeIPVersion::V4) ? "4" : "6";
+            std::cout << "  - " << addr.ip << ":" << addr.port << " (IP" << v << ")\n";
+        }
+    }
+    std::cout << "\n";
+}
+
 int main(int argc, char* argv[]) {
     try {
+        // Phase selection:
+        // - default: Phase 1 (quick tunnel request only)
+        // - --phase2 [region]: Phase 2 (edge discovery DNS only)
+        if (argc > 1 && std::string(argv[1]) == "--phase2") {
+            std::string region;
+            if (argc > 2) {
+                region = argv[2];
+            }
+
+            std::cout << "Running Phase 2 (Edge Discovery DNS SRV lookup)";
+            if (!region.empty()) {
+                std::cout << " for region '" << region << "'";
+            }
+            std::cout << "...\n";
+
+            EdgeDiscovery discovery;
+            auto groups = discovery.ResolveEdgeAddrs(region, ConfigIPVersion::Auto);
+            printEdgeDiscovery(groups);
+
+            std::cout << "Edge discovery completed successfully.\n";
+            std::cout << "Exiting (Phase 2 - DNS only).\n";
+            return 0;
+        }
+
         std::string quick_service = "https://api.trycloudflare.com";
         
         // Parse command line arguments (optional quick-service URL)
