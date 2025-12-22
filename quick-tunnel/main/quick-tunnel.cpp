@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <cstring>
 #include <stdexcept>
+#include <unistd.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
@@ -10,8 +12,53 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "quick_tunnel.h"
+#include "dns_utils.h"
 
 static const char *TAG = "QUICK_TUNNEL_MAIN";
+
+namespace {
+
+static void run_edge_srv_discovery_demo() {
+    // Cloudflare edge discovery SRV name (same as Go):
+    const char* srv_domain = "_v2-origintunneld._tcp.argotunnel.com";
+
+    // For now use Cloudflare resolver directly over UDP.
+    // (This mirrors the "direct resolver" approach and avoids relying on system DNS behavior.)
+    const char* dns_server = "1.1.1.1";
+    const uint16_t dns_port = 53;
+    const int timeout_ms = 5000;
+
+    ESP_LOGI(TAG, "Phase 2 demo: SRV lookup over UDP: %s (dns=%s:%u)", srv_domain, dns_server, dns_port);
+
+    dns_utils_srv_record_t records[16];
+    size_t record_count = 0;
+    int rc = dns_utils_lookup_srv_udp(dns_server, dns_port, srv_domain, timeout_ms,
+                                      records, sizeof(records) / sizeof(records[0]), &record_count);
+    if (rc != 0 || record_count == 0) {
+        ESP_LOGW(TAG, "SRV lookup failed rc=%d count=%d", rc, (int)record_count);
+        return;
+    }
+
+    ESP_LOGI(TAG, "SRV answers: %d", (int)record_count);
+    for (size_t i = 0; i < record_count; ++i) {
+        const auto& r = records[i];
+        ESP_LOGI(TAG, "SRV prio=%u weight=%u port=%u target=%s", r.priority, r.weight, r.port, r.target);
+
+        char ips[16][DNS_UTILS_MAX_IP_STR];
+        size_t ip_count = 0;
+        int rcrc = dns_utils_resolve_host_ips(r.target, ips, 16, &ip_count);
+        if (rcrc != 0 || ip_count == 0) {
+            // Do not use gai_strerror; just log numeric error code.
+            ESP_LOGW(TAG, "resolve_host_ips failed rc=%d target=%s", rcrc, r.target);
+            continue;
+        }
+        for (size_t j = 0; j < ip_count; ++j) {
+            ESP_LOGI(TAG, "  -> %s:%u", ips[j], r.port);
+        }
+    }
+}
+
+} // namespace
 
 void printTunnelInfo(const QuickTunnelCredentials* creds) {
     ESP_LOGI(TAG, "");
@@ -39,6 +86,9 @@ void printTunnelInfo(const QuickTunnelCredentials* creds) {
 void quick_tunnel_task(void *pvParameters)
 {
     try {
+        // Phase 2: edge discovery (DNS SRV lookup) demo
+        run_edge_srv_discovery_demo();
+
         std::string quick_service = "https://api.trycloudflare.com";
         
         ESP_LOGI(TAG, "Requesting new quick Tunnel on %s...", quick_service.c_str());
@@ -77,5 +127,5 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(example_connect());
     ESP_LOGI(TAG, "Connected to AP, begin quick tunnel example");
 
-    xTaskCreate(&quick_tunnel_task, "quick_tunnel_task", 8192, NULL, 5, NULL);
+    xTaskCreate(&quick_tunnel_task, "quick_tunnel_task", 2*8192, NULL, 5, NULL);
 }
