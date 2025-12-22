@@ -70,17 +70,23 @@ The implementation follows an incremental approach, building and verifying each 
 ```
 cpp-cloudflared/
 ├── CMakeLists.txt          # Build configuration
+├── Makefile                # Convenience wrapper (Linux): build/test/phase2
 ├── README.md               # User-facing documentation
 ├── AGENTS.md               # This file - agent documentation
 ├── PLAN.md                 # Implementation plan and checklist
 ├── PHASE1_NOTES.md         # Phase 1 specific notes
 ├── PHASE2_NOTES.md         # Phase 2 specific notes
+├── PHASE3_NOTES.md         # Phase 3 specific notes
 ├── test_phase1.sh          # Test script for Phase 1
 ├── components/
-│   └── cloudflared/
-│       ├── include/        # Public headers (host + ESP32)
-│       └── src/            # Host implementation sources
+│   ├── cloudflared/
+│   │   ├── include/        # Cloudflared public headers (host + ESP32)
+│   │   └── src/            # Host implementation sources
+│   └── dns_utils/
+│       ├── include/        # Reusable DNS helpers (host)
+│       └── src/
 ├── quick-tunnel/           # ESP32 (ESP-IDF) app project
+│   └── main/               # ESP32 entrypoint + C shim for SRV DNS
 ├── third_party/
 │   └── cjson/             # Bundled cJSON library
 └── build/                  # Build directory
@@ -161,7 +167,8 @@ See PLAN.md for detailed implementation checklist. Current status:
 - ✅ Phase 1.4: C++ ESP32 Version
 - ✅ Phase 1.5: Compare All Versions
 - **Phase 1**: ✅ COMPLETED - All sub-phases tested and working
-- ⏳ Phase 2: Edge Discovery (DNS SRV lookup) - In progress
+- ✅ Phase 2: Edge Discovery (DNS SRV lookup) - implemented on host + ESP32
+- ⏳ Phase 3: QUIC Connection - next
 
 ## Notes for Future Development
 

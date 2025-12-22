@@ -4,6 +4,12 @@
 
 Phase 2 implements DNS SRV lookup to discover Cloudflare edge servers. This phase discovers the actual IP addresses and ports where Cloudflare edge servers are listening for tunnel connections.
 
+## Status (C++ Implementation)
+
+- **Host**: ✅ implemented + tested (`cpp-cloudflared` binary + unit test)
+- **ESP32**: ✅ implemented + tested (logs SRV answers and resolved `ip:port` on device)
+- **Go parity**: ⏳ DoT fallback + strict side-by-side comparison is still optional work
+
 ## Go Implementation Analysis
 
 ### Key Files
@@ -231,6 +237,44 @@ dig AAAA <target-from-srv-record>
 - **Multiple Regions**: Required for HA - must handle gracefully if only 1 region
 - **IPv6 Support**: Must handle both IPv4 and IPv6 addresses
 - **Port Handling**: Port comes from SRV record, not DNS A/AAAA lookup
+
+## Actual C++ Implementation (what we built)
+
+### Host (Linux)
+
+**Reusable DNS utility**:
+- `components/dns_utils/include/dns_utils.h`
+- `components/dns_utils/src/dns_utils.cpp`
+
+Implementation details:
+- **SRV lookup**: uses system resolver via `libresolv` (`res_query` + `ns_initparse` + `dn_expand`)
+  - Handles compressed names in SRV answers
+  - Applies RFC2782 ordering (priority + weighted random within same priority)
+- **A/AAAA resolution**: uses `getaddrinfo()` to get both IPv4 and IPv6 for each SRV target
+
+**Cloudflare-specific wrapper**:
+- `components/cloudflared/include/edge_discovery.h`
+- `components/cloudflared/src/edge_discovery.cpp`
+
+Entry points:
+- `./build/cpp-cloudflared --phase2 [region]` prints SRV groups and resolved `ip:port`
+- `ctest --test-dir build -R test_phase2_srv` runs a minimal sanity test
+
+### ESP32 (ESP-IDF)
+
+We intentionally **do not include esp-dns private headers from C++**, because `esp_dns_utils.h` is private and not C++-safe.
+
+Instead:
+- `quick-tunnel/main/dns_utils.c` (plain C) includes the private esp-dns header and implements:
+  - SRV UDP query using `esp_dns_create_query(..., qtype=33)`
+  - SRV response parsing (including RFC1035 compression pointers)
+  - hostname → IP string list using `getaddrinfo()` + `inet_ntop()`
+- `quick-tunnel/main/dns_utils.h` exposes a C/C++-safe API used by:
+  - `quick-tunnel/main/quick-tunnel.cpp`
+
+Current behavior:
+- SRV queries are sent to **Cloudflare resolver** `1.1.1.1:53` for determinism.
+- DoT fallback is not implemented yet (parity with Go is Phase 2.6 in `PLAN.md`).
 
 ## References
 
