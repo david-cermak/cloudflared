@@ -1,5 +1,8 @@
 #include "quick_tunnel.h"
 #include "edge_discovery.h"
+#ifdef NGTCP2_FOUND
+#include "quic_client.h"
+#endif
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
@@ -49,6 +52,7 @@ int main(int argc, char* argv[]) {
         // Phase selection:
         // - default: Phase 1 (quick tunnel request only)
         // - --phase2 [region]: Phase 2 (edge discovery DNS only)
+        // - --phase3 [test_server]: Phase 3 (QUIC connection test)
         if (argc > 1 && std::string(argv[1]) == "--phase2") {
             std::string region;
             if (argc > 2) {
@@ -69,6 +73,51 @@ int main(int argc, char* argv[]) {
             std::cout << "Exiting (Phase 2 - DNS only).\n";
             return 0;
         }
+
+#ifdef NGTCP2_FOUND
+        if (argc > 1 && std::string(argv[1]) == "--phase3") {
+            std::string test_server = "cloudflare-quic.com";
+            uint16_t port = 443;
+            
+            if (argc > 2) {
+                test_server = argv[2];
+            }
+            if (argc > 3) {
+                port = static_cast<uint16_t>(std::stoi(argv[3]));
+            }
+
+            std::cout << "Running Phase 3 (QUIC Connection Test)\n";
+            std::cout << "Connecting to: " << test_server << ":" << port << "\n";
+            std::cout << "\n";
+
+            QuicConnectionResult result = QuicClient::ConnectToTestServer(test_server, port);
+            
+            if (result.success) {
+                std::cout << "\n";
+                std::cout << "+--------------------------------------------------------------------------------------------+\n";
+                std::cout << "|  QUIC connection test completed successfully!                                              |\n";
+                std::cout << "+--------------------------------------------------------------------------------------------+\n";
+                std::cout << "\n";
+                std::cout << "Server: " << result.server_name << ":" << result.port << "\n";
+                std::cout << "Status: " << result.error_message << "\n";
+                std::cout << "\n";
+                std::cout << "Exiting (Phase 3 - QUIC test).\n";
+                return 0;
+            } else {
+                std::cerr << "\n";
+                std::cerr << "QUIC connection test failed:\n";
+                std::cerr << "  Error: " << result.error_message << "\n";
+                std::cerr << "\n";
+                return 1;
+            }
+        }
+#else
+        if (argc > 1 && std::string(argv[1]) == "--phase3") {
+            std::cerr << "Error: QUIC support not available (ngtcp2 not found)\n";
+            std::cerr << "Please install libngtcp2-dev or build ngtcp2 from source\n";
+            return 1;
+        }
+#endif
 
         std::string quick_service = "https://api.trycloudflare.com";
         

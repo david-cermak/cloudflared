@@ -1,4 +1,4 @@
-.PHONY: all build clean test phase2
+.PHONY: all build clean test phase2 phase3
 
 BUILD_DIR ?= build
 CONFIG ?= Release
@@ -12,6 +12,9 @@ build:
 
 phase2: build
 	@"$(BUILD_DIR)/cpp-cloudflared" --phase2
+
+phase3: build
+	@"$(BUILD_DIR)/cpp-cloudflared" --phase3
 
 test: build
 	@ctest --test-dir "$(BUILD_DIR)" --output-on-failure || true

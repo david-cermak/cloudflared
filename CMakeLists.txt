@@ -36,6 +36,38 @@ if(NOT CJSON_FOUND)
     set(USE_BUNDLED_CJSON ON)
 endif()
 
+# Find OpenSSL (required for QUIC/TLS)
+find_package(OpenSSL REQUIRED)
+if(OpenSSL_FOUND)
+    message(STATUS "Found OpenSSL: ${OPENSSL_VERSION}")
+else()
+    message(FATAL_ERROR "OpenSSL not found. Please install libssl-dev")
+endif()
+
+# Find ngtcp2 (QUIC library)
+pkg_check_modules(NGTCP2 ngtcp2)
+if(NOT NGTCP2_FOUND)
+    # Try manual detection
+    find_library(NGTCP2_LIBRARY
+        NAMES ngtcp2 libngtcp2
+        PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+    )
+    find_path(NGTCP2_INCLUDE_DIR
+        NAMES ngtcp2/ngtcp2.h
+        PATHS /usr/include /usr/local/include
+    )
+    if(NGTCP2_LIBRARY AND NGTCP2_INCLUDE_DIR)
+        set(NGTCP2_FOUND TRUE)
+        set(NGTCP2_LIBRARIES ${NGTCP2_LIBRARY})
+        set(NGTCP2_INCLUDE_DIRS ${NGTCP2_INCLUDE_DIR})
+        message(STATUS "Found ngtcp2: ${NGTCP2_LIBRARY}")
+    else()
+        message(WARNING "ngtcp2 not found. QUIC functionality will not be available.")
+        message(WARNING "Install ngtcp2: sudo apt-get install libngtcp2-dev (or build from source)")
+        set(NGTCP2_FOUND FALSE)
+    endif()
+endif()
+
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/components/cloudflared/src)
@@ -58,6 +90,12 @@ set(HEADERS
     components/dns_utils/include/dns_utils.h
 )
 
+# Add QUIC client if ngtcp2 is available
+if(NGTCP2_FOUND)
+    list(APPEND SOURCES components/cloudflared/src/quic_client.cpp)
+    list(APPEND HEADERS components/cloudflared/include/quic_client.h)
+endif()
+
 # Add executable
 add_executable(cpp-cloudflared ${SOURCES} ${HEADERS})
 
@@ -65,11 +103,20 @@ add_executable(cpp-cloudflared ${SOURCES} ${HEADERS})
 target_link_libraries(cpp-cloudflared
     ${CURL_LIBRARIES}
     resolv
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 target_include_directories(cpp-cloudflared PRIVATE
     ${CURL_INCLUDE_DIRS}
 )
+
+# Add ngtcp2 if available
+if(NGTCP2_FOUND)
+    target_link_libraries(cpp-cloudflared ${NGTCP2_LIBRARIES})
+    target_include_directories(cpp-cloudflared PRIVATE ${NGTCP2_INCLUDE_DIRS})
+    target_compile_definitions(cpp-cloudflared PRIVATE NGTCP2_FOUND=1)
+endif()
 
 # If cJSON not found, add bundled version
 if(USE_BUNDLED_CJSON)
