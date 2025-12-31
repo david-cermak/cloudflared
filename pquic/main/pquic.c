@@ -41,6 +41,9 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
 #include <picoquic.h>
 #include <picoquic_utils.h>
 #include <picosocks.h>
@@ -48,6 +51,7 @@
 #include <picoquic_packet_loop.h>
 // #include "picoquic_sample.h"
 #include "picoquic_bbr.h"
+#include "esp_log.h"
 
 #define PICOQUIC_SAMPLE_ALPN "picoquic_sample"
 #define PICOQUIC_SAMPLE_SNI "test.example.com"
@@ -59,12 +63,9 @@
 #define PICOQUIC_SAMPLE_FILE_READ_ERROR 0x104
 #define PICOQUIC_SAMPLE_FILE_CANCEL_ERROR 0x105
 
-#define PICOQUIC_SAMPLE_CLIENT_TICKET_STORE "sample_ticket_store.bin";
-#define PICOQUIC_SAMPLE_CLIENT_TOKEN_STORE "sample_token_store.bin";
-#define PICOQUIC_SAMPLE_CLIENT_QLOG_DIR ".";
-#define PICOQUIC_SAMPLE_SERVER_QLOG_DIR ".";
-
-#define PICOQUIC_SAMPLE_BACKGROUND_MAX_FILES 32
+static const char* TAG = "pquic";
+/* Hard cap to avoid unbounded buffering. */
+#define SAMPLE_CLIENT_MAX_DOWNLOAD_BYTES (64 * 1024)
 
  /* Client context and callback management:
   *
@@ -96,18 +97,17 @@ typedef struct st_sample_client_stream_ctx_t {
     uint64_t stream_id;
     size_t name_length;
     size_t name_sent_length;
-    FILE* F;
     size_t bytes_received;
+    uint8_t* recv_buf;
+    size_t recv_cap;
     uint64_t remote_error;
     unsigned int is_name_sent : 1;
-    unsigned int is_file_open : 1;
     unsigned int is_stream_reset : 1;
     unsigned int is_stream_finished : 1;
 } sample_client_stream_ctx_t;
 
 typedef struct st_sample_client_ctx_t {
     picoquic_cnx_t* cnx;
-    char const* default_dir;
     char const** file_names;
     sample_client_stream_ctx_t* first_stream;
     sample_client_stream_ctx_t* last_stream;
@@ -117,6 +117,41 @@ typedef struct st_sample_client_ctx_t {
     int is_disconnected;
 } sample_client_ctx_t;
 
+static int sample_client_append_bytes(sample_client_stream_ctx_t* stream_ctx, const uint8_t* bytes, size_t length)
+{
+    if (length == 0) {
+        return 0;
+    }
+    if (stream_ctx->bytes_received + length > SAMPLE_CLIENT_MAX_DOWNLOAD_BYTES) {
+        ESP_LOGE(TAG, "Download too large (%zu + %zu > %u), aborting",
+            stream_ctx->bytes_received, length, (unsigned)SAMPLE_CLIENT_MAX_DOWNLOAD_BYTES);
+        return -1;
+    }
+
+    size_t needed = stream_ctx->bytes_received + length;
+    if (needed > stream_ctx->recv_cap) {
+        size_t new_cap = (stream_ctx->recv_cap == 0) ? 1024 : stream_ctx->recv_cap;
+        while (new_cap < needed) {
+            new_cap *= 2;
+            if (new_cap > SAMPLE_CLIENT_MAX_DOWNLOAD_BYTES) {
+                new_cap = SAMPLE_CLIENT_MAX_DOWNLOAD_BYTES;
+                break;
+            }
+        }
+        uint8_t* new_buf = (uint8_t*)realloc(stream_ctx->recv_buf, new_cap);
+        if (new_buf == NULL) {
+            ESP_LOGE(TAG, "Out of memory while buffering response (%zu bytes)", new_cap);
+            return -1;
+        }
+        stream_ctx->recv_buf = new_buf;
+        stream_ctx->recv_cap = new_cap;
+    }
+
+    memcpy(stream_ctx->recv_buf + stream_ctx->bytes_received, bytes, length);
+    stream_ctx->bytes_received += length;
+    return 0;
+}
+
 static int sample_client_create_stream(picoquic_cnx_t* cnx,
     sample_client_ctx_t* client_ctx, int file_rank)
 {
@@ -125,7 +160,7 @@ static int sample_client_create_stream(picoquic_cnx_t* cnx,
         malloc(sizeof(sample_client_stream_ctx_t));
 
     if (stream_ctx == NULL) {
-        fprintf(stdout, "Memory Error, cannot create stream for file number %d\n", (int)file_rank);
+        ESP_LOGE(TAG, "Memory Error, cannot create stream for file number %d", (int)file_rank);
         ret = -1;
     }
     else {
@@ -146,10 +181,10 @@ static int sample_client_create_stream(picoquic_cnx_t* cnx,
          * the connection is ready. */
         ret = picoquic_mark_active_stream(cnx, stream_ctx->stream_id, 1, stream_ctx);
         if (ret != 0) {
-            fprintf(stdout, "Error %d, cannot initialize stream for file number %d\n", ret, (int)file_rank);
+            ESP_LOGE(TAG, "Error %d, cannot initialize stream for file number %d", ret, (int)file_rank);
         }
         else {
-            printf("Opened stream %d for file %s\n", 4 * file_rank, client_ctx->file_names[file_rank]);
+            ESP_LOGI(TAG, "Opened stream %" PRIu64 " for file %s", stream_ctx->stream_id, client_ctx->file_names[file_rank]);
         }
     }
 
@@ -171,11 +206,10 @@ static void sample_client_report(sample_client_ctx_t* client_ctx)
         else {
             status = "unknown status";
         }
-        printf("%s: %s, received %zu bytes", client_ctx->file_names[stream_ctx->file_rank], status, stream_ctx->bytes_received);
+        ESP_LOGI(TAG, "%s: %s, received %zu bytes", client_ctx->file_names[stream_ctx->file_rank], status, stream_ctx->bytes_received);
         if (stream_ctx->is_stream_reset && stream_ctx->remote_error != PICOQUIC_SAMPLE_NO_ERROR){
-            printf(", error 0x%" PRIx64 "(%s)", stream_ctx->remote_error, picoquic_error_name(stream_ctx->remote_error));
+            ESP_LOGI(TAG, "remote error 0x%" PRIx64 "(%s)", stream_ctx->remote_error, picoquic_error_name(stream_ctx->remote_error));
         }
-        printf("\n");
         stream_ctx = stream_ctx->next_stream;
     }
 }
@@ -186,9 +220,7 @@ static void sample_client_free_context(sample_client_ctx_t* client_ctx)
 
     while ((stream_ctx = client_ctx->first_stream) != NULL) {
         client_ctx->first_stream = stream_ctx->next_stream;
-        if (stream_ctx->F != NULL) {
-            (void)picoquic_file_close(stream_ctx->F);
-        }
+        free(stream_ctx->recv_buf);
         free(stream_ctx);
     }
     client_ctx->last_stream = NULL;
@@ -229,58 +261,34 @@ int sample_client_callback(picoquic_cnx_t* cnx,
             }
             else
             {
-                if (stream_ctx->F == NULL) {
-                    /* Open the file to receive the data. This is done at the last possible moment,
-                     * to minimize the number of files open simultaneously.
-                     * When formatting the file_path, verify that the directory name is zero-length,
-                     * or terminated by a proper file separator.
-                     */
-                    char file_path[1024];
-                    size_t dir_len = strlen(client_ctx->default_dir);
-                    size_t file_name_len = strlen(client_ctx->file_names[stream_ctx->file_rank]);
-
-                    if (dir_len > 0 && dir_len < sizeof(file_path)) {
-                        memcpy(file_path, client_ctx->default_dir, dir_len);
-                        if (file_path[dir_len - 1] != PICOQUIC_FILE_SEPARATOR[0]) {
-                            file_path[dir_len] = PICOQUIC_FILE_SEPARATOR[0];
-                            dir_len++;
-                        }
-                    }
-
-                    if (dir_len + file_name_len + 1 >= sizeof(file_path)) {
-                        /* Unexpected: could not format the file name */
-                        fprintf(stderr, "Could not format the file path.\n");
-                        ret = -1;
-                    } else {
-                        memcpy(file_path + dir_len, client_ctx->file_names[stream_ctx->file_rank],
-                            file_name_len);
-                        file_path[dir_len + file_name_len] = 0;
-                        stream_ctx->F = picoquic_file_open(file_path, "wb");
-
-                        if (stream_ctx->F == NULL) {
-                            /* Could not open the file */
-                            fprintf(stderr, "Could not open the file: %s\n", file_path);
-                            ret = -1;
-                        }
-                    }
-                }
-
                 if (ret == 0 && length > 0) {
-                    /* write the received bytes to the file */
-                    if (fwrite(bytes, length, 1, stream_ctx->F) != 1) {
-                        /* Could not write file to disk */
-                        fprintf(stderr, "Could not write data to disk.\n");
-                        ret = -1;
-                    }
-                    else {
-                        stream_ctx->bytes_received += length;
-                    }
+                    /* No filesystem: buffer in memory. */
+                    ret = sample_client_append_bytes(stream_ctx, bytes, length);
                 }
 
                 if (ret == 0 && fin_or_event == picoquic_callback_stream_fin) {
-                    stream_ctx->F = picoquic_file_close(stream_ctx->F);
                     stream_ctx->is_stream_finished = 1;
                     client_ctx->nb_files_received++;
+
+                    /* Print the downloaded content. */
+                    {
+                        const char* fname = client_ctx->file_names[stream_ctx->file_rank];
+                        size_t n = stream_ctx->bytes_received;
+                        /* Ensure NUL termination for logging as a string. */
+                        if (stream_ctx->recv_cap < n + 1) {
+                            uint8_t* grown = (uint8_t*)realloc(stream_ctx->recv_buf, n + 1);
+                            if (grown != NULL) {
+                                stream_ctx->recv_buf = grown;
+                                stream_ctx->recv_cap = n + 1;
+                            }
+                        }
+                        if (stream_ctx->recv_buf != NULL && stream_ctx->recv_cap >= n + 1) {
+                            stream_ctx->recv_buf[n] = 0;
+                            ESP_LOGI(TAG, "%s: %s", fname, (char*)stream_ctx->recv_buf);
+                        } else {
+                            ESP_LOGI(TAG, "%s: received %zu bytes", fname, n);
+                        }
+                    }
 
                     if ((client_ctx->nb_files_received + client_ctx->nb_files_failed) >= client_ctx->nb_files) {
                         /* everything is done, close the connection */
@@ -310,7 +318,7 @@ int sample_client_callback(picoquic_cnx_t* cnx,
 
                 if ((client_ctx->nb_files_received + client_ctx->nb_files_failed) >= client_ctx->nb_files) {
                     /* everything is done, close the connection */
-                    fprintf(stdout, "All done, closing the connection.\n");
+                    ESP_LOGI(TAG, "All done, closing the connection.");
                     ret = picoquic_close(cnx, 0);
                 }
             }
@@ -318,7 +326,7 @@ int sample_client_callback(picoquic_cnx_t* cnx,
         case picoquic_callback_stateless_reset:
         case picoquic_callback_close: /* Received connection close */
         case picoquic_callback_application_close: /* Received application close */
-            fprintf(stdout, "Connection closed.\n");
+            ESP_LOGI(TAG, "Connection closed.");
             /* Mark the connection as completed */
             client_ctx->is_disconnected = 1;
             /* Remove the application callback */
@@ -328,16 +336,15 @@ int sample_client_callback(picoquic_cnx_t* cnx,
             /* The client did not get the right version.
              * TODO: some form of negotiation?
              */
-            fprintf(stdout, "Received a version negotiation request:");
+            ESP_LOGI(TAG, "Received a version negotiation request:");
             for (size_t byte_index = 0; byte_index + 4 <= length; byte_index += 4) {
                 uint32_t vn = 0;
                 for (int i = 0; i < 4; i++) {
                     vn <<= 8;
                     vn += bytes[byte_index + i];
                 }
-                fprintf(stdout, "%s%08x", (byte_index == 0) ? " " : ", ", vn);
+                ESP_LOGI(TAG, "%s%08x", (byte_index == 0) ? " " : ", ", vn);
             }
-            fprintf(stdout, "\n");
             break;
         case picoquic_callback_stream_gap:
             /* This callback is never used. */
@@ -368,7 +375,7 @@ int sample_client_callback(picoquic_cnx_t* cnx,
                     stream_ctx->is_name_sent = is_fin;
                 }
                 else {
-                    fprintf(stderr, "\nError, coulfd not get data buffer.\n");
+                    ESP_LOGE(TAG, "Error, could not get data buffer.");
                     ret = -1;
                 }
             }
@@ -377,11 +384,11 @@ int sample_client_callback(picoquic_cnx_t* cnx,
             }
             break;
         case picoquic_callback_almost_ready:
-            fprintf(stdout, "Connection to the server completed, almost ready.\n");
+            ESP_LOGI(TAG, "Connection to the server completed, almost ready.");
             break;
         case picoquic_callback_ready:
             /* TODO: Check that the transport parameters are what the sample expects */
-            fprintf(stdout, "Connection to the server confirmed.\n");
+            ESP_LOGI(TAG, "Connection to the server confirmed.");
             break;
         default:
             /* unexpected -- just ignore. */
@@ -411,7 +418,7 @@ static int sample_client_loop_cb(picoquic_quic_t* quic, picoquic_packet_loop_cb_
     else {
         switch (cb_mode) {
         case picoquic_packet_loop_ready:
-            fprintf(stdout, "Waiting for packets.\n");
+            ESP_LOGI(TAG, "Waiting for packets.");
             break;
         case picoquic_packet_loop_after_receive:
             break;
@@ -442,11 +449,13 @@ static int sample_client_init(char const* server_name, int server_port, char con
 {
     int ret = 0;
     char const* sni = PICOQUIC_SAMPLE_SNI;
-    char const* qlog_dir = PICOQUIC_SAMPLE_CLIENT_QLOG_DIR;
     uint64_t current_time = picoquic_current_time();
 
     *quic = NULL;
     *cnx = NULL;
+    (void)default_dir;
+    (void)ticket_store_filename;
+    (void)token_store_filename;
 
     /* Get the server's address */
     if (ret == 0) {
@@ -454,7 +463,7 @@ static int sample_client_init(char const* server_name, int server_port, char con
 
         ret = picoquic_get_server_address(server_name, server_port, server_address, &is_name);
         if (ret != 0) {
-            fprintf(stderr, "Cannot get the IP address for <%s> port <%d>", server_name, server_port);
+            ESP_LOGE(TAG, "Cannot get the IP address for <%s> port <%d>", server_name, server_port);
         }
         else if (is_name) {
             sni = server_name;
@@ -472,21 +481,15 @@ static int sample_client_init(char const* server_name, int server_port, char con
     if (ret == 0) {
         *quic = picoquic_create(1, NULL, NULL, NULL, PICOQUIC_SAMPLE_ALPN, NULL, NULL,
             NULL, NULL, NULL, current_time, NULL,
-            ticket_store_filename, NULL, 0);
+            NULL, NULL, 0);
 
         if (*quic == NULL) {
-            fprintf(stderr, "Could not create quic context\n");
+            ESP_LOGE(TAG, "Could not create quic context");
             ret = -1;
         }
         else {
-            if (picoquic_load_retry_tokens(*quic, token_store_filename) != 0) {
-                fprintf(stderr, "No token file present. Will create one as <%s>.\n", token_store_filename);
-            }
-
             picoquic_set_default_congestion_algorithm(*quic, picoquic_bbr_algorithm);
-
-            picoquic_set_key_log_file_from_env(*quic);
-            // picoquic_set_qlog(*quic, qlog_dir);
+            /* Intentionally not enabling keylog/qlog here (they typically write to files). */
             picoquic_set_log_level(*quic, 1);
         }
     }
@@ -496,16 +499,14 @@ static int sample_client_init(char const* server_name, int server_port, char con
      */
 
     if (ret == 0) {
-        client_ctx->default_dir = default_dir;
-
-        printf("Starting connection to %s, port %d\n", server_name, server_port);
+        ESP_LOGI(TAG, "Starting connection to %s, port %d", server_name, server_port);
 
         /* Create a client connection */
         *cnx = picoquic_create_cnx(*quic, picoquic_null_connection_id, picoquic_null_connection_id,
             (struct sockaddr*)server_address, current_time, 0, sni, PICOQUIC_SAMPLE_ALPN, 1);
 
         if (*cnx == NULL) {
-            fprintf(stderr, "Could not create connection context\n");
+            ESP_LOGE(TAG, "Could not create connection context");
             ret = -1;
         }
         else {
@@ -516,16 +517,18 @@ static int sample_client_init(char const* server_name, int server_port, char con
             /* Client connection parameters could be set here, before starting the connection. */
             ret = picoquic_start_client_cnx(*cnx);
             if (ret < 0) {
-                fprintf(stderr, "Could not activate connection\n");
+                ESP_LOGE(TAG, "Could not activate connection");
             }
             else {
                 /* Printing out the initial CID, which is used to identify log files */
                 picoquic_connection_id_t icid = picoquic_get_initial_cnxid(*cnx);
-                printf("Initial connection ID: ");
-                for (uint8_t i = 0; i < icid.id_len; i++) {
-                    printf("%02x", icid.id[i]);
+                char icid_hex[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1];
+                size_t pos = 0;
+                for (uint8_t i = 0; i < icid.id_len && (pos + 2) < sizeof(icid_hex); i++) {
+                    pos += (size_t)snprintf(icid_hex + pos, sizeof(icid_hex) - pos, "%02x", icid.id[i]);
                 }
-                printf("\n");
+                icid_hex[pos] = 0;
+                ESP_LOGI(TAG, "Initial connection ID: %s", icid_hex);
             }
         }
     }
@@ -557,11 +560,9 @@ int picoquic_sample_client(char const * server_name, int server_port, char const
     picoquic_quic_t* quic = NULL;
     picoquic_cnx_t* cnx = NULL;
     sample_client_ctx_t client_ctx = { 0 };
-    char const* ticket_store_filename = PICOQUIC_SAMPLE_CLIENT_TICKET_STORE;
-    char const* token_store_filename = PICOQUIC_SAMPLE_CLIENT_TOKEN_STORE;
 
     ret = sample_client_init(server_name, server_port, default_dir,
-        ticket_store_filename, token_store_filename,
+        NULL, NULL,
         &server_address, &quic, &cnx, &client_ctx);
 
     if (ret == 0) {
@@ -573,7 +574,7 @@ int picoquic_sample_client(char const * server_name, int server_port, char const
         for (int i = 0; ret == 0 && i < client_ctx.nb_files; i++) {
             ret = sample_client_create_stream(cnx, &client_ctx, i);
             if (ret < 0) {
-                fprintf(stderr, "Could not initiate stream for fi\n");
+                ESP_LOGE(TAG, "Could not initiate stream for file #%d", i);
             }
         }
     }
@@ -584,14 +585,8 @@ int picoquic_sample_client(char const * server_name, int server_port, char const
     /* Done. At this stage, we could print out statistics, etc. */
     sample_client_report(&client_ctx);
 
-    /* Save tickets and tokens, and free the QUIC context */
+    /* Free the QUIC context */
     if (quic != NULL) {
-        if (picoquic_save_session_tickets(quic, ticket_store_filename) != 0) {
-            fprintf(stderr, "Could not store the saved session tickets.\n");
-        }
-        if (picoquic_save_retry_tokens(quic, token_store_filename) != 0) {
-            fprintf(stderr, "Could not save tokens to <%s>.\n", token_store_filename);
-        }
         picoquic_free(quic);
     }
 
@@ -603,8 +598,8 @@ int picoquic_sample_client(char const * server_name, int server_port, char const
 
 void app_main(void)
 {
-#define NAME "192.168.4.0"
-#define PORT "12345"
-
-    picoquic_sample_client(NAME, PORT, ".", 1, "index.htm");
+#define NAME "127.0.0.1"
+#define PORT 4433
+    static const char* file_names[] = { "index.htm" };
+    (void)picoquic_sample_client(NAME, PORT, ".", 1, file_names);
 }
