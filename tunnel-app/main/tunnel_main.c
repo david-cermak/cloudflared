@@ -30,6 +30,7 @@
 #include "nvs_flash.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_random.h"
 
 #include "tunnel_types.h"
 #include "quic_tunnel.h"
@@ -500,21 +501,11 @@ static int full_tunnel(const char *edge_server, uint16_t port)
     state.auth.tunnel_secret = state.tunnel_secret;
     state.auth.tunnel_secret_len = state.tunnel_secret_len;
 
-    /* Generate a client ID (UUID v4-style from /dev/urandom) */
+    /* Generate a client ID (UUID v4) using ESP-IDF's HW RNG */
     static uint8_t client_uuid[16];
-    FILE *rng = fopen("/dev/urandom", "rb");
-    if (rng) {
-        if (fread(client_uuid, 1, 16, rng) != 16) {
-            memcpy(client_uuid, state.tunnel_id_bytes, 16);
-        }
-        fclose(rng);
-        /* Set version and variant bits for UUID v4 */
-        client_uuid[6] = (client_uuid[6] & 0x0F) | 0x40; /* version 4 */
-        client_uuid[8] = (client_uuid[8] & 0x3F) | 0x80; /* variant 1 */
-    } else {
-        /* Fallback: use tunnel ID bytes as client ID */
-        memcpy(client_uuid, state.tunnel_id_bytes, 16);
-    }
+    esp_fill_random(client_uuid, sizeof(client_uuid));
+    client_uuid[6] = (client_uuid[6] & 0x0F) | 0x40; /* version 4 */
+    client_uuid[8] = (client_uuid[8] & 0x3F) | 0x80; /* variant 1 */
 
     state.conn_options.client_id = client_uuid;
     state.conn_options.version = "cpp-cloudflared/0.1.0";
