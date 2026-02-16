@@ -37,7 +37,7 @@ set(PICOQUIC_LIBRARY_FILES
 #        picoquic/picoquic_ptls_minicrypto.c
         picoquic/picoquic_ptls_openssl.c
         picoquic/picoquic_mbedtls.c
-#        picoquic/picosocks.c
+       picoquic/picosocks.c
         picoquic/picosplay.c
         picoquic/port_blocking.c
         picoquic/prague.c
@@ -60,7 +60,8 @@ set(PICOQUIC_LIBRARY_FILES
 list(TRANSFORM PICOQUIC_LIBRARY_FILES PREPEND "${PQDIR}")
 list(TRANSFORM PTLS_FILES PREPEND "${PTLSDIR}")
 
-idf_component_register(SRCS "pquic.c" "picosocks_esp32.c"
+idf_component_register(SRCS "pquic.c" 
+                        #     "picosocks_esp32.c"
                             ${PICOQUIC_LIBRARY_FILES}
                             ${PTLS_FILES}
                     INCLUDE_DIRS "${PTLSDIR}/include" "${PQDIR}/picoquic_mbedtls" "${PQDIR}/picoquic")

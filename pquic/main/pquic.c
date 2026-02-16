@@ -47,6 +47,9 @@
 #include <picoquic.h>
 #include <picoquic_utils.h>
 #include <picosocks.h>
+#include "nvs_flash.h"
+#include "esp_event.h"
+#include "protocol_examples_common.h"
 // #include <autoqlog.h>
 #include <picoquic_packet_loop.h>
 // #include "picoquic_sample.h"
@@ -598,8 +601,17 @@ int picoquic_sample_client(char const * server_name, int server_port, char const
 
 void app_main(void)
 {
-#define NAME "127.0.0.1"
-#define PORT 4433
+
+    printf("app_main\n");
+        // Initialize ESP-IDF components
+        // ESP_ERROR_CHECK(nvs_flash_init());
+        // ESP_ERROR_CHECK(esp_netif_init());
+        // ESP_ERROR_CHECK(esp_event_loop_create_default());
+        // ESP_ERROR_CHECK(example_connect());
+#define NAME "192.168.0.37"
+#define PORT 1234
+// #define NAME "127.0.0.1"
+// #define PORT 4433
     static const char* file_names[] = { "index.htm" };
     (void)picoquic_sample_client(NAME, PORT, ".", 1, file_names);
 }
