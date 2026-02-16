@@ -55,6 +55,19 @@ int data_stream_parse_request(const uint8_t *data, size_t len,
 }
 
 /* ────────────────────────────────────────────────────────────────
+ *  Calculate request size (preamble + capnp)
+ * ──────────────────────────────────────────────────────────────── */
+
+size_t data_stream_request_size(const uint8_t *data, size_t len)
+{
+    if (len < PREAMBLE_LEN) return 0;
+    size_t capnp_size = capnp_wire_message_size(data + PREAMBLE_LEN,
+                                                 len - PREAMBLE_LEN);
+    if (capnp_size == 0) return 0;
+    return PREAMBLE_LEN + capnp_size;
+}
+
+/* ────────────────────────────────────────────────────────────────
  *  Build outgoing ConnectResponse
  * ──────────────────────────────────────────────────────────────── */
 

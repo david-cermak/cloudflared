@@ -49,7 +49,7 @@ typedef struct {
 
 /* ── Connection options for registration ────────────────────────── */
 typedef struct {
-    const char *client_id;        /* UUID bytes (16 bytes, can be NULL) */
+    const uint8_t *client_id;     /* UUID bytes (16 bytes, can be NULL) */
     const char *version;          /* e.g. "cpp-cloudflared/0.1.0" */
     const char *arch;             /* e.g. "linux_amd64" */
     bool replace_existing;

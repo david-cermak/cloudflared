@@ -28,6 +28,11 @@ int data_stream_build_response(const cf_connect_response_t *resp,
                                uint8_t *buf, size_t buf_cap,
                                size_t *out_len);
 
+/* Calculate total bytes consumed by preamble + ConnectRequest capnp message.
+ * Returns 0 if the data is too short or malformed.
+ * The HTTP body, if any, starts at data + returned_size. */
+size_t data_stream_request_size(const uint8_t *data, size_t len);
+
 /* Extract HTTP method from ConnectRequest metadata.
  * Returns pointer to the value string, or NULL if not found.
  * The returned pointer is into req->metadata and valid while req lives. */

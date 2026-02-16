@@ -50,7 +50,7 @@ static inline uint32_t r_le32(const uint8_t *p) {
  *  Encode Bootstrap message
  *
  *  rpc.capnp Message struct: data_words=1, ptr_count=1
- *    data[0..2]  = union discriminant (4 = bootstrap)
+ *    data[0..2]  = union discriminant (8 = bootstrap)
  *    pointer[0]  = Bootstrap struct
  *
  *  Bootstrap struct: data_words=1, ptr_count=1
@@ -73,8 +73,8 @@ static int encode_bootstrap(uint8_t *out, size_t out_cap, size_t *out_len)
     if (msg < 0) return -1;
     capnp_write_struct_ptr(b.buf, (size_t)rp, (size_t)msg, 1, 1);
 
-    /* data[0..2] = 4 (bootstrap discriminant) */
-    w_le16(b.buf + msg, 4);
+    /* data[0..2] = 8 (bootstrap discriminant — from Go generated code) */
+    w_le16(b.buf + msg, 8);
 
     /* pointer[0] = Bootstrap struct (data_words=1, ptr_count=1) */
     size_t msg_ptr0 = (size_t)msg + 8; /* after 1 data word */
@@ -99,15 +99,22 @@ static int encode_bootstrap(uint8_t *out, size_t out_cap, size_t *out_len)
  *
  *  Call struct (data_words=3, ptr_count=3):
  *    data[0..4]   = questionId (uint32, = 1)
+ *    data[4..6]   = methodId (uint16: 0 = registerConnection)
+ *    data[6..8]   = sendResultsTo union discriminant (0 = caller)
  *    data[8..16]  = interfaceId (uint64: 0xf71695ec7fe85497)
- *    data[16..18] = methodId (uint16: 0)
- *    pointer[0]   = MessageTarget struct
- *    pointer[1]   = Payload struct
- *    pointer[2]   = null (sendResultsTo.thirdParty)
+ *    pointer[0]   = target (MessageTarget)
+ *    pointer[1]   = params (Payload)
+ *    pointer[2]   = sendResultsTo.thirdParty (null)
  *
- *  MessageTarget (for importedCap): data_words=1, ptr_count=1
- *    data[0..2] = union discriminant (0 = importedCap)
- *    data[4..8] = cap index (uint32, = 0)
+ *  MessageTarget (promisedAnswer for pipelined Bootstrap):
+ *    data_words=1, ptr_count=1
+ *    data[0..4] = importedCap value (unused when discriminant=1)
+ *    data[4..6] = union discriminant (1 = promisedAnswer)
+ *    pointer[0] = PromisedAnswer struct
+ *
+ *  PromisedAnswer: data_words=1, ptr_count=1
+ *    data[0..4] = questionId (uint32, = 0, refs Bootstrap)
+ *    pointer[0] = transform (null = empty)
  *
  *  Payload: data_words=0, ptr_count=2
  *    pointer[0] = content (AnyPointer = RegisterConnection params)
@@ -147,24 +154,37 @@ static int encode_call(const cf_tunnel_auth_t *auth,
     if (call < 0) return -1;
     capnp_write_struct_ptr(b.buf, msg_ptr0, (size_t)call, 3, 3);
 
-    /* Call fields */
+    /* Call data section (from Go generated code):
+     *   Uint32(0)  = questionId
+     *   Uint16(4)  = methodId
+     *   Uint16(6)  = sendResultsTo discriminant
+     *   Uint64(8)  = interfaceId
+     *   Bit(128)   = allowThirdPartyTailCall */
     w_le32(b.buf + call + 0, 1);       /* questionId = 1 */
-    /* data[4..6] = target union discriminant: 0 = importedCap (already 0) */
-    /* data[6..8] = sendResultsTo union discriminant: 0 = caller (already 0) */
+    w_le16(b.buf + call + 4, 0);       /* methodId = 0 (registerConnection) */
+    /* data[6..8] = sendResultsTo discriminant: 0 = caller (already 0) */
     w_le64(b.buf + call + 8, TUNNEL_SERVER_IID); /* interfaceId */
-    w_le16(b.buf + call + 16, 0);      /* methodId = 0 (registerConnection) */
-    /* data[18..19] = allowThirdPartyTailCall = false (already 0) */
 
     size_t call_ptrs = (size_t)call + 3 * 8; /* pointer section after 3 data words */
 
-    /* ── Call.target = MessageTarget (importedCap) ────────────── */
-    /* MessageTarget: dw=1, pc=1 */
+    /* ── Call.target = MessageTarget (promisedAnswer) ─────────── */
+    /* MessageTarget: dw=1, pc=1
+     *   Uint32(0) = importedCap (unused for promisedAnswer)
+     *   Uint16(4) = which discriminant (1 = promisedAnswer)
+     *   pointer[0] = PromisedAnswer struct */
     int target = capnp_alloc(&b, 1 + 1);
     if (target < 0) return -1;
     capnp_write_struct_ptr(b.buf, call_ptrs + 0, (size_t)target, 1, 1);
-    /* target.importedCap discriminant = 0 (already 0) */
-    w_le32(b.buf + target + 4, 0); /* cap index = 0 (from bootstrap) */
-    /* pointer[0] of MessageTarget = null (only used for promisedAnswer) */
+    w_le16(b.buf + target + 4, 1); /* which = promisedAnswer */
+
+    /* PromisedAnswer: dw=1, pc=1
+     *   Uint32(0) = questionId (= 0, references Bootstrap question)
+     *   pointer[0] = transform (null = empty list) */
+    int pa = capnp_alloc(&b, 1 + 1);
+    if (pa < 0) return -1;
+    capnp_write_struct_ptr(b.buf, (size_t)target + 8, (size_t)pa, 1, 1);
+    w_le32(b.buf + pa, 0); /* questionId = 0 (bootstrap question) */
+    /* transform pointer[0] = null (already zeroed) */
 
     /* ── Call.params = Payload: dw=0, pc=2 ────────────────────── */
     int payload = capnp_alloc(&b, 0 + 2);
@@ -236,7 +256,7 @@ static int encode_call(const cf_tunnel_auth_t *auth,
         /* ClientInfo.clientId (data) at pointer[0] */
         if (options->client_id) {
             if (capnp_write_data(&b, (size_t)ci + 0,
-                                 (const uint8_t *)options->client_id, 16) != 0)
+                                 options->client_id, 16) != 0)
                 return -1;
         }
         /* ClientInfo.features (list of text) at pointer[1] — empty / null */
@@ -319,12 +339,19 @@ int control_stream_encode_register(
  *
  *  For results (discriminant 0):
  *    pointer[0] = Payload (dw=0, pc=2)
- *      pointer[0] = content (AnyPointer → ConnectionResponse)
- *      pointer[1] = capTable
+ *      pointer[0] = content (AnyPointer)
+ *      pointer[1] = capTable (List(CapDescriptor))
+ *
+ *  For Bootstrap Return, content is a capability pointer (type 3) —
+ *  we skip this message since the Call uses pipelining.
+ *
+ *  For Call Return, content = registerConnection_Results wrapper:
+ *    registerConnection_Results (dw=0, pc=1):
+ *      pointer[0] = ConnectionResponse
  *
  *  ConnectionResponse (dw=1, pc=1):
  *    data[0..2] = union discriminant
- *      0 = error (pointer[0] = TunnelRegistrationError)
+ *      0 = error (pointer[0] = ConnectionError)
  *      1 = connectionDetails (pointer[0] = ConnectionDetails)
  *
  *  ConnectionDetails (dw=1, pc=2):
@@ -332,14 +359,10 @@ int control_stream_encode_register(
  *    pointer[0] = uuid (data, 16 bytes)
  *    pointer[1] = locationName (text)
  *
- *  TunnelRegistrationError (dw=1, pc=1):
- *    data[0..2] = retryAfter (int64? — check schema)
- *    Actually: retryAfterSeconds field, plus:
- *    data[0..8] = retryAfter (int64, nanoseconds)
- *    data[8] bit 0 = shouldRetry (bool)? No, dw might differ.
- *    TODO: Verify exact layout against Go implementation.
- *
- *  For simplicity, we parse what we can and log unknowns.
+ *  ConnectionError (dw=2, pc=1):
+ *    data[0..8]  = retryAfter (int64)
+ *    data[8] bit 0 = shouldRetry (bool, = Bit(64))
+ *    pointer[0] = cause (text)
  * ──────────────────────────────────────────────────────────────── */
 
 int control_stream_decode_response(const uint8_t *data, size_t len,
@@ -449,11 +472,31 @@ int control_stream_decode_response(const uint8_t *data, size_t len,
         return -1;
     }
 
-    /* Payload.content (pointer[0]) = ConnectionResponse struct */
+    /*
+     * Payload.content (pointer[0]) = registerConnection_Results wrapper.
+     * Results wrapper: dw=0, pc=1, with pointer[0] = ConnectionResponse.
+     * We must dereference this wrapper to reach the actual ConnectionResponse.
+     */
     size_t payload_ptrs = payload_off + (size_t)payload_dw * 8;
+
+    /* Read the Results wrapper struct */
+    size_t results_off;
+    uint16_t results_dw, results_pc;
+    if (capnp_read_struct_ptr(&reader, payload_ptrs + 0,
+                              &results_off, &results_dw, &results_pc) != 0) {
+        ESP_LOGE(TAG, "failed to read Results wrapper struct");
+        snprintf(result->error, sizeof(result->error), "invalid Results wrapper");
+        return -1;
+    }
+    ESP_LOGD(TAG, "Results wrapper: off=%zu dw=%u pc=%u",
+             results_off, results_dw, results_pc);
+
+    /* Navigate to ConnectionResponse at Results.pointer[0] */
+    size_t results_ptrs = results_off + (size_t)results_dw * 8;
     size_t connresp_off;
     uint16_t connresp_dw, connresp_pc;
-    if (capnp_read_struct_ptr(&reader, payload_ptrs + 0,
+    if (results_pc < 1 ||
+        capnp_read_struct_ptr(&reader, results_ptrs + 0,
                               &connresp_off, &connresp_dw, &connresp_pc) != 0) {
         ESP_LOGE(TAG, "failed to read ConnectionResponse struct");
         snprintf(result->error, sizeof(result->error), "invalid ConnectionResponse");
@@ -467,16 +510,10 @@ int control_stream_decode_response(const uint8_t *data, size_t len,
     ESP_LOGD(TAG, "ConnectionResponse union: %u", cr_which);
 
     if (cr_which == 0) {
-        /* Error case: pointer[0] = TunnelRegistrationError */
-        /*
-         * TunnelRegistrationError struct:
-         *   data_words=2, ptr_count=1
-         *   data[0..8]  = retryAfterNs (int64)
-         *   data[8..10] = cause union discriminant? (TODO: verify)
-         *   pointer[0]  = error text
-         *
-         * TODO: Exact layout needs verification against Go wire captures.
-         *       For now, try to extract the error text from pointer[0].
+        /* Error case: pointer[0] = ConnectionError (dw=2, pc=1)
+         *   Uint64(0)    = retryAfter (int64)
+         *   Bit(64)      = shouldRetry (byte 8, bit 0)
+         *   Ptr(0)       = cause (text)
          */
         size_t err_struct_off;
         uint16_t err_dw, err_pc;

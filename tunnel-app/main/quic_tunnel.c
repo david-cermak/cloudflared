@@ -180,7 +180,7 @@ static int tunnel_picoquic_callback(picoquic_cnx_t *cnx,
             if (recv_buf_append(sc, bytes, length) != 0) {
                 return PICOQUIC_ERROR_MEMORY;
             }
-            ESP_LOGD(TAG, "Stream %" PRIu64 " recv %zu bytes (total %zu)",
+            ESP_LOGI(TAG, "Stream %" PRIu64 " recv %zu bytes (total %zu)",
                      stream_id, length, sc->recv_len);
             if (ctx->event_cb) {
                 ctx->event_cb(ctx, QT_EVENT_STREAM_DATA, stream_id,
@@ -247,7 +247,7 @@ static int tunnel_picoquic_callback(picoquic_cnx_t *cnx,
             memcpy(buf, sc->send_buf + sc->send_offset, to_send);
             sc->send_offset += to_send;
         }
-        ESP_LOGD(TAG, "Stream %" PRIu64 " sent %zu bytes (fin=%d, still_active=%d)",
+        ESP_LOGI(TAG, "Stream %" PRIu64 " sent %zu bytes (fin=%d, still_active=%d)",
                  sc->stream_id, to_send, is_fin, is_still_active);
 
         /* Free send buffer once fully consumed */

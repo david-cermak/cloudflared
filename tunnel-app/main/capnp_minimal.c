@@ -375,6 +375,21 @@ bool capnp_read_bool(const capnp_reader_t *r,
 }
 
 /* ────────────────────────────────────────────────────────────────
+ *  Wire message size helper
+ * ──────────────────────────────────────────────────────────────── */
+
+size_t capnp_wire_message_size(const uint8_t *data, size_t len)
+{
+    if (len < 8) return 0;
+    uint32_t num_segs_minus1 = read_le32(data);
+    if (num_segs_minus1 != 0) return 0; /* single-segment only */
+    uint32_t seg0_words = read_le32(data + 4);
+    size_t total = 8 + (size_t)seg0_words * 8;
+    if (total > len) return 0;
+    return total;
+}
+
+/* ────────────────────────────────────────────────────────────────
  *  High-level: Decode ConnectRequest
  *
  *  Cap'n Proto schema (from tunnelrpc.capnp):

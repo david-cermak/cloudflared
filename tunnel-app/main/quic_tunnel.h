@@ -28,6 +28,7 @@ typedef struct stream_ctx {
     size_t recv_len;
     size_t recv_cap;
     bool recv_fin;
+    bool request_handled; /* App flag: data stream request already processed */
     struct stream_ctx *next;
 } stream_ctx_t;
 

@@ -95,6 +95,11 @@ uint8_t capnp_read_uint8(const capnp_reader_t *r,
 bool capnp_read_bool(const capnp_reader_t *r,
                      size_t struct_data_offset, size_t byte_offset, int bit);
 
+/* Calculate the total wire size of a single-segment capnp message from raw bytes.
+ * Returns 0 if the data is too short or malformed.
+ * Useful for determining where the capnp message ends in a stream buffer. */
+size_t capnp_wire_message_size(const uint8_t *data, size_t len);
+
 /* ── High-level: Data stream protocol ─────────────────────────── */
 
 /* Decode a ConnectRequest from raw Cap'n Proto bytes
