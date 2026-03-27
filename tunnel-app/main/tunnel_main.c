@@ -469,7 +469,7 @@ static int full_tunnel(const char *edge_server, uint16_t port)
         return -1;
     }
     if (!origin_url || !origin_url[0]) {
-        origin_url = "http://localhost:8080";
+        origin_url = "static://";
     }
 
     /* Initialize state */

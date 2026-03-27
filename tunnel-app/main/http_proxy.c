@@ -6,6 +6,7 @@
  */
 
 #include "http_proxy.h"
+#include "http_proxy_static.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,7 @@ typedef struct {
     int connect_timeout_ms;
     int read_timeout_ms;
     bool initialised;
+    bool static_mode;
 } proxy_state_t;
 
 static proxy_state_t s_state;
@@ -68,6 +70,13 @@ int http_proxy_init(const http_proxy_config_t *config)
     }
 
     memset(&s_state, 0, sizeof(s_state));
+
+    if (strcmp(config->origin_url, "static://") == 0) {
+        s_state.static_mode = true;
+        s_state.initialised = true;
+        ESP_LOGI(TAG, "init: static mode (built-in page)");
+        return 0;
+    }
 
     if (parse_origin_url(config->origin_url,
                          s_state.host, sizeof(s_state.host),
@@ -101,6 +110,10 @@ int http_proxy_forward(const cf_connect_request_t *req,
     if (!req || !resp) {
         ESP_LOGE(TAG, "forward: NULL req or resp");
         return -1;
+    }
+
+    if (s_state.static_mode) {
+        return http_proxy_static_forward(req, body, body_len, resp);
     }
 
     memset(resp, 0, sizeof(*resp));
