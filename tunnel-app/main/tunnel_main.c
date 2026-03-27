@@ -29,6 +29,8 @@
 
 #include "nvs_flash.h"
 #include "esp_event.h"
+#include "protocol_examples_common.h"
+#include "esp_event.h"
 #include "esp_log.h"
 #include "esp_random.h"
 
@@ -38,6 +40,9 @@
 #include "control_stream.h"
 #include "data_stream.h"
 #include "capnp_minimal.h"
+#include "quick_tunnel.h"
+#include "qrcode.h"
+
 
 static const char *TAG = "cf_tunnel";
 
@@ -218,7 +223,9 @@ static void try_parse_control_messages(quic_tunnel_ctx_t *ctx,
         cf_registration_result_t result = {0};
         int ret = control_stream_decode_response(buf, msg_size, &result);
 
-        if (ret == 0 && result.success) {
+        if (ret == 0 && result.is_bootstrap) {
+            ESP_LOGD(TAG, "Control stream: Bootstrap Return (skipped)");
+        } else if (ret == 0 && result.success) {
             state->registered = true;
             ESP_LOGI(TAG, "=== REGISTRATION SUCCESS ===");
             ESP_LOGI(TAG, "  Connection UUID: %s", result.uuid);
@@ -227,7 +234,6 @@ static void try_parse_control_messages(quic_tunnel_ctx_t *ctx,
                      result.tunnel_is_remote ? "yes" : "no");
             ESP_LOGI(TAG, "Tunnel is ready, waiting for requests...");
         } else if (ret == 0 && result.error[0]) {
-            /* Got a response but it's an error */
             ESP_LOGE(TAG, "=== REGISTRATION FAILED ===");
             ESP_LOGE(TAG, "  Error: %s", result.error);
             ESP_LOGE(TAG, "  Retry: %s (after %" PRId64 " ns)",
@@ -235,8 +241,7 @@ static void try_parse_control_messages(quic_tunnel_ctx_t *ctx,
                      result.retry_after_ns);
             quic_tunnel_close(ctx);
         } else if (ret != 0) {
-            /* Not a Return message (could be Bootstrap response) - skip it */
-            ESP_LOGI(TAG, "Control stream: skipping non-Return message at offset %zu",
+            ESP_LOGW(TAG, "Control stream: failed to decode message at offset %zu",
                      state->ctrl_parsed_offset);
         }
 
@@ -351,43 +356,46 @@ static void try_handle_data_stream(quic_tunnel_ctx_t *ctx,
 
     stream_ctx_t *sc = quic_tunnel_find_stream(ctx, stream_id);
     if (!sc || sc->request_handled) {
-        return; /* Already processed or no context */
+        return;
     }
 
-    /* Check if we have enough data for the preamble + capnp message */
     size_t req_hdr_size = data_stream_request_size(sc->recv_buf, sc->recv_len);
     if (req_hdr_size == 0) {
-        return; /* Not enough data yet */
+        return;
     }
 
-    /* Mark as handled so we don't process the same stream twice */
     sc->request_handled = true;
 
     ESP_LOGI(TAG, "Processing data stream %" PRIu64 " (%zu bytes received, hdr=%zu)",
              stream_id, sc->recv_len, req_hdr_size);
 
-    /* Parse ConnectRequest from the accumulated buffer */
-    cf_connect_request_t req = {0};
-    int ret = data_stream_parse_request(sc->recv_buf, sc->recv_len, &req);
-    if (ret != 0) {
-        ESP_LOGE(TAG, "Failed to parse ConnectRequest on stream %" PRIu64, stream_id);
-        for (size_t i = 0; i < sc->recv_len && i < 32; i++) {
-            printf("%02x ", sc->recv_buf[i]);
-        }
-        if (sc->recv_len > 0) printf("\n");
+    /* Heap-allocate to avoid blowing the ESP32 task stack.
+     * Each struct contains CF_MAX_METADATA * sizeof(cf_metadata_t) ≈ 5 KB. */
+    cf_connect_request_t *req = calloc(1, sizeof(*req));
+    cf_http_response_t *http_resp = calloc(1, sizeof(*http_resp));
+    cf_connect_response_t *connect_resp = calloc(1, sizeof(*connect_resp));
+    uint8_t *resp_buf = malloc(4096);
+    if (!req || !http_resp || !connect_resp || !resp_buf) {
+        ESP_LOGE(TAG, "Out of memory handling data stream");
+        free(req); free(http_resp); free(connect_resp); free(resp_buf);
         return;
     }
 
-    const char *method = data_stream_get_method(&req);
-    const char *host = data_stream_get_host(&req);
+    int ret = data_stream_parse_request(sc->recv_buf, sc->recv_len, req);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to parse ConnectRequest on stream %" PRIu64, stream_id);
+        goto cleanup;
+    }
+
+    const char *method = data_stream_get_method(req);
+    const char *host = data_stream_get_host(req);
     ESP_LOGI(TAG, "  Request: %s %s (host=%s, type=%d, %zu metadata)",
              method ? method : "?",
-             req.dest,
+             req->dest,
              host ? host : "?",
-             (int)req.type,
-             req.metadata_count);
+             (int)req->type,
+             req->metadata_count);
 
-    /* Body starts after the preamble + capnp message */
     const uint8_t *body = NULL;
     size_t body_len = 0;
     if (req_hdr_size < sc->recv_len) {
@@ -396,49 +404,38 @@ static void try_handle_data_stream(quic_tunnel_ctx_t *ctx,
         ESP_LOGI(TAG, "  Request body: %zu bytes", body_len);
     }
 
-    /* Phase 6: Proxy to origin */
-    cf_http_response_t http_resp = {0};
-    ret = http_proxy_forward(&req, body, body_len, &http_resp);
+    ret = http_proxy_forward(req, body, body_len, http_resp);
     if (ret != 0) {
         ESP_LOGE(TAG, "HTTP proxy forward failed");
-        http_resp.status_code = 502;
+        http_resp->status_code = 502;
     }
 
     ESP_LOGI(TAG, "  Origin response: %d (%zu bytes body, %zu headers)",
-             http_resp.status_code, http_resp.body_len, http_resp.header_count);
+             http_resp->status_code, http_resp->body_len, http_resp->header_count);
 
-    /* Phase 5: Build ConnectResponse with HTTP metadata */
-    cf_connect_response_t connect_resp = {0};
-    data_stream_build_http_metadata(http_resp.status_code,
-                                    http_resp.headers,
-                                    http_resp.header_count,
-                                    &connect_resp);
+    data_stream_build_http_metadata(http_resp->status_code,
+                                    http_resp->headers,
+                                    http_resp->header_count,
+                                    connect_resp);
 
-    /* Encode the ConnectResponse wire message */
-    uint8_t resp_buf[4096];
     size_t resp_len = 0;
-    ret = data_stream_build_response(&connect_resp, resp_buf,
-                                     sizeof(resp_buf), &resp_len);
+    ret = data_stream_build_response(connect_resp, resp_buf, 4096, &resp_len);
     if (ret != 0) {
         ESP_LOGE(TAG, "Failed to build ConnectResponse");
-        http_proxy_free_response(&http_resp);
-        return;
+        goto cleanup;
     }
 
-    /* Send ConnectResponse header */
     ESP_LOGI(TAG, "  Sending ConnectResponse: %zu bytes", resp_len);
     ret = quic_tunnel_send(ctx, stream_id, resp_buf, resp_len, false);
     if (ret != 0) {
         ESP_LOGE(TAG, "Failed to send ConnectResponse header");
-        http_proxy_free_response(&http_resp);
-        return;
+        goto cleanup;
     }
 
-    /* Send response body and FIN */
-    if (http_resp.body && http_resp.body_len > 0) {
-        ESP_LOGI(TAG, "  Sending response body: %zu bytes + FIN", http_resp.body_len);
+    if (http_resp->body && http_resp->body_len > 0) {
+        ESP_LOGI(TAG, "  Sending response body: %zu bytes + FIN", http_resp->body_len);
         ret = quic_tunnel_send(ctx, stream_id,
-                               http_resp.body, http_resp.body_len, true);
+                               http_resp->body, http_resp->body_len, true);
     } else {
         ESP_LOGI(TAG, "  Sending FIN (no body)");
         ret = quic_tunnel_send(ctx, stream_id, NULL, 0, true);
@@ -448,37 +445,53 @@ static void try_handle_data_stream(quic_tunnel_ctx_t *ctx,
         ESP_LOGE(TAG, "Failed to send response body/FIN");
     }
 
-    http_proxy_free_response(&http_resp);
+cleanup:
+    http_proxy_free_response(http_resp);
+    free(req);
+    free(http_resp);
+    free(connect_resp);
+    free(resp_buf);
 }
 
 static int full_tunnel(const char *edge_server, uint16_t port)
 {
     ESP_LOGI(TAG, "=== Full Tunnel: %s:%u ===", edge_server, port);
 
-    /* Read credentials from environment variables */
+    /* Read credentials from environment variables or auto-provision */
     const char *tunnel_id_str = getenv("CF_TUNNEL_ID");
     const char *account_tag = getenv("CF_ACCOUNT_TAG");
     const char *secret_b64 = getenv("CF_TUNNEL_SECRET");
     const char *origin_url = getenv("CF_ORIGIN_URL");
 
+    /* Initialize state */
+    tunnel_state_t state = {0};
+
+    static quick_tunnel_result_t qt; /* static: strings used as pointers later */
+
     if (!tunnel_id_str || !account_tag || !secret_b64) {
-        ESP_LOGE(TAG, "Missing required environment variables:");
-        ESP_LOGE(TAG, "  CF_TUNNEL_ID=%s", tunnel_id_str ? tunnel_id_str : "(unset)");
-        ESP_LOGE(TAG, "  CF_ACCOUNT_TAG=%s", account_tag ? account_tag : "(unset)");
-        ESP_LOGE(TAG, "  CF_TUNNEL_SECRET=%s", secret_b64 ? "(set)" : "(unset)");
-        return -1;
+        ESP_LOGI(TAG, "No credentials provided — provisioning quick tunnel...");
+        if (quick_tunnel_provision(&qt) != 0 || !qt.ok) {
+            ESP_LOGE(TAG, "Quick tunnel provisioning failed");
+            return -1;
+        }
+        tunnel_id_str = qt.id;
+        account_tag   = qt.account_tag;
+        /* Secret already decoded by quick_tunnel_provision */
+        memcpy(state.tunnel_secret, qt.secret, qt.secret_len);
+        state.tunnel_secret_len = qt.secret_len;
+        secret_b64 = NULL; /* skip base64 decode below */
+
+        ESP_LOGI(TAG, "Quick tunnel: https://%s/", qt.hostname);
     }
+
     if (!origin_url || !origin_url[0]) {
         origin_url = "static://";
     }
-
-    /* Initialize state */
-    tunnel_state_t state = {0};
     state.origin_url = origin_url;
 
     /* Parse tunnel UUID */
     if (parse_uuid(tunnel_id_str, state.tunnel_id_bytes) != 0) {
-        ESP_LOGE(TAG, "Failed to parse CF_TUNNEL_ID: %s", tunnel_id_str);
+        ESP_LOGE(TAG, "Failed to parse tunnel ID: %s", tunnel_id_str);
         return -1;
     }
     ESP_LOGI(TAG, "Tunnel ID: %s", tunnel_id_str);
@@ -487,12 +500,14 @@ static int full_tunnel(const char *edge_server, uint16_t port)
     snprintf(state.account_tag, sizeof(state.account_tag), "%s", account_tag);
     ESP_LOGI(TAG, "Account tag: %s", state.account_tag);
 
-    /* Base64 decode tunnel secret */
-    if (base64_decode(secret_b64, state.tunnel_secret,
-                      sizeof(state.tunnel_secret),
-                      &state.tunnel_secret_len) != 0) {
-        ESP_LOGE(TAG, "Failed to decode CF_TUNNEL_SECRET");
-        return -1;
+    /* Base64 decode tunnel secret (skip if already decoded by quick_tunnel) */
+    if (secret_b64) {
+        if (base64_decode(secret_b64, state.tunnel_secret,
+                          sizeof(state.tunnel_secret),
+                          &state.tunnel_secret_len) != 0) {
+            ESP_LOGE(TAG, "Failed to decode CF_TUNNEL_SECRET");
+            return -1;
+        }
     }
     ESP_LOGI(TAG, "Tunnel secret: %zu bytes", state.tunnel_secret_len);
 
@@ -557,11 +572,16 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    #if !defined(CONFIG_IDF_TARGET_LINUX)
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(example_connect());
+    #endif
 
     const char *edge = CF_EDGE_SRV_HOST;
     uint16_t port = CF_EDGE_PORT;
 
-    const char *mode_env = getenv("CF_MODE");
+    const char *mode_env = "full";
+    // getenv("CF_MODE");
     const char *edge_env = getenv("CF_EDGE");
     const char *port_env = getenv("CF_PORT");
 
@@ -583,10 +603,8 @@ void app_main(void)
     ESP_LOGI(TAG, "Done.");
 }
 
-#ifdef CONFIG_IDF_TARGET_LINUX
 int main(void)
 {
     app_main();
     return 0;
 }
-#endif

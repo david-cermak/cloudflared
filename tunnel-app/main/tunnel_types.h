@@ -63,6 +63,7 @@ typedef struct {
     char uuid[64];               /* Connection UUID as hex string */
     char location[32];           /* Airport code e.g. "SJC" */
     bool tunnel_is_remote;
+    bool is_bootstrap;            /* True if this is the Bootstrap Return (skip) */
     /* Error fields (if !success) */
     char error[256];
     int64_t retry_after_ns;
@@ -77,14 +78,14 @@ typedef enum {
 } cf_connection_type_t;
 
 typedef struct {
-    char key[128];
-    char val[512];
+    char key[64];
+    char val[256];
 } cf_metadata_t;
 
-#define CF_MAX_METADATA 32
+#define CF_MAX_METADATA 16
 
 typedef struct {
-    char dest[512];
+    char dest[256];
     cf_connection_type_t type;
     cf_metadata_t metadata[CF_MAX_METADATA];
     size_t metadata_count;
@@ -92,7 +93,7 @@ typedef struct {
 
 /* ── ConnectResponse (outgoing to edge, Phase 5) ────────────────── */
 typedef struct {
-    char error[256];             /* Empty string = no error */
+    char error[128];
     cf_metadata_t metadata[CF_MAX_METADATA];
     size_t metadata_count;
 } cf_connect_response_t;

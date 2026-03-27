@@ -414,6 +414,14 @@ int control_stream_decode_response(const uint8_t *data, size_t len,
     }
     ESP_LOGD(TAG, "Return.answerId = %u", answer_id);
 
+    /* Bootstrap Return (answerId=0): Payload.content is a capability
+     * pointer, not a struct.  We use pipelining so we don't need this
+     * response — signal the caller to skip it. */
+    if (answer_id == 0) {
+        result->is_bootstrap = true;
+        return 0;
+    }
+
     /* Return union discriminant at data[6..8] */
     uint16_t ret_which = 0;
     if (ret_dw >= 1) {
