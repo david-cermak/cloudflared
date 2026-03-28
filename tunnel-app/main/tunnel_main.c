@@ -482,6 +482,11 @@ static int full_tunnel(const char *edge_server, uint16_t port)
         secret_b64 = NULL; /* skip base64 decode below */
 
         ESP_LOGI(TAG, "Quick tunnel: https://%s/", qt.hostname);
+
+        char url[300];
+        snprintf(url, sizeof(url), "https://%s/", qt.hostname);
+        esp_qrcode_config_t qr_cfg = ESP_QRCODE_CONFIG_DEFAULT();
+        esp_qrcode_generate(&qr_cfg, url);
     }
 
     if (!origin_url || !origin_url[0]) {
